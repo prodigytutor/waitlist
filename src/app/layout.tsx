@@ -3,7 +3,8 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/themes/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
-
+import { Provider as RollbarProvider } from '@rollbar/react';
+import { clientConfig } from '@/rollbar';
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
@@ -25,6 +26,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
+    <RollbarProvider config={clientConfig}>
     <html lang="en" suppressHydrationWarning>
       <body
         className={`${geistSans.className} ${geistMono.variable} antialiased`}
@@ -40,5 +42,6 @@ export default function RootLayout({
         </ThemeProvider>
       </body>
     </html>
+    </RollbarProvider>
   );
 }

@@ -20,6 +20,7 @@ export default function Home() {
       <div className="mt-4">
         <Counter />
       </div>
+      <Link href="/err">Error</Link>
       <footer className="sticky top-[100vh]">
         <Button size="icon" variant="ghost">
           <Link href="https://github.com/zeitgg/zeitlist" target="_blank">
