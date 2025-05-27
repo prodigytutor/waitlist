@@ -2,9 +2,11 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/themes/theme-provider";
+import { SessionProvider } from "next-auth/react";
 import { Toaster } from "@/components/ui/sonner";
 import { Provider as RollbarProvider } from '@rollbar/react';
 import { clientConfig } from '@/rollbar';
+import AuthHeader from '@/components/layout/AuthHeader'; // Import the new header
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
@@ -31,15 +33,20 @@ export default function RootLayout({
       <body
         className={`${geistSans.className} ${geistMono.variable} antialiased`}
       >
-        <ThemeProvider
-          attribute="class"
-          defaultTheme="system"
-          enableSystem
-          disableTransitionOnChange
-        >
-          <Toaster position="bottom-center" />
-          {children}
-        </ThemeProvider>
+        <SessionProvider>
+          <ThemeProvider
+            attribute="class"
+            defaultTheme="system"
+            enableSystem
+            disableTransitionOnChange
+          >
+            <AuthHeader /> {/* Add the header here */}
+            <main style={{ padding: '1rem' }}> {/* Add a main tag for content separation */}
+              <Toaster position="bottom-center" />
+              {children}
+            </main>
+          </ThemeProvider>
+        </SessionProvider>
       </body>
     </html>
     </RollbarProvider>

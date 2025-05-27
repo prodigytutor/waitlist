@@ -25,7 +25,12 @@ const formSchema = z.object({
 
 type FormValues = z.infer<typeof formSchema>;
 
-export function WaitlistForm() {
+interface WaitlistFormProps {
+  waitlistId?: string;
+  onSuccess?: () => void; // Optional callback for successful submission
+}
+
+export function WaitlistForm({ waitlistId, onSuccess }: WaitlistFormProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const form = useForm<FormValues>({
@@ -51,8 +56,18 @@ export function WaitlistForm() {
       return;
     }
 
+    if (!waitlistId) {
+      toast.error("No waitlist selected for sign-up.");
+      setIsSubmitting(false);
+      return;
+    }
+
     try {
-      const response = await fetch("/api/waitlist", {
+      // Arcjet protection would be here if it's configured client-side,
+      // or more typically, it's handled server-side in the API route.
+      // For now, we assume server-side as in the API route.
+
+      const response = await fetch(`/api/waitlists/${waitlistId}/leads`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -60,7 +75,7 @@ export function WaitlistForm() {
         body: JSON.stringify(validationResult.data),
       });
 
-      let responseBody = {};
+      let responseBody: { message?: string; error?: string } = {};
       try {
         // 204
         const text = await response.text();
@@ -90,8 +105,21 @@ export function WaitlistForm() {
           "Successfully joined the waitlist!"
       );
       form.reset();
+      if (onSuccess) {
+        onSuccess();
+      }
     } catch (error) {
-      toast.error(
+      // The API route for leads returns 409 for duplicates, handle this specifically
+      if (error instanceof Error && error.message.includes("409")) {
+        toast.error("This email is already registered for this waitlist.");
+      } else {
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : "An unexpected error occurred. Please try again."
+        );
+      }
+    } finally {
         error instanceof Error
           ? error.message
           : "An unexpected error occurred. Please try again."
@@ -123,6 +151,7 @@ export function WaitlistForm() {
                   className="h-11 rounded-md"
                   aria-label="Email address for waitlist"
                   aria-invalid={!!form.formState.errors.email}
+                  disabled={!waitlistId || isSubmitting} // Disable if no waitlistId
                   {...field}
                 />
               </FormControl>
@@ -132,7 +161,7 @@ export function WaitlistForm() {
         />
         <Button
           type="submit"
-          disabled={isSubmitting}
+          disabled={!waitlistId || isSubmitting} // Disable if no waitlistId
           className="h-11 shrink-0 rounded-md px-6 font-medium"
           aria-live="polite"
         >
@@ -146,6 +175,11 @@ export function WaitlistForm() {
           )}
         </Button>
       </motion.form>
+      {!waitlistId && (
+        <p className="text-sm text-red-500 mt-2">
+          This form is not active. A specific waitlist ID is required to sign up.
+        </p>
+      )}
     </Form>
   );
 }
