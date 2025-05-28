@@ -52,12 +52,19 @@ export async function POST(request: NextRequest, { params }: LeadParams) {
     }
     // Note: This endpoint is public for adding leads, so no ownership check here.
 
-    const success = await addToWaitlist(waitlistId, email);
+    const leadId = await addToWaitlist(waitlistId, email);
 
-    if (success) {
-      return NextResponse.json({ message: 'Successfully added to waitlist' }, { status: 200 });
+    if (leadId) {
+      // addToWaitlist now returns leadId for both new and existing leads (if email was already on the waitlist)
+      // Or null on actual failure to add.
+      // The client might want to know if it was a new or existing lead,
+      // but for now, returning the leadId is sufficient.
+      // A 201 (Created) could be used for new leads, and 200 (OK) for existing.
+      // For simplicity, we'll use 200 and let the client decide if it needs more info (e.g., by fetching lead details).
+      return NextResponse.json({ leadId: leadId, message: 'Lead processed successfully.' }, { status: 200 });
     } else {
-      return NextResponse.json({ error: 'Email already registered or failed to add' }, { status: 409 });
+      // This implies an internal error in addToWaitlist, not a duplicate.
+      return NextResponse.json({ error: 'Failed to add lead to waitlist' }, { status: 500 });
     }
   } catch (error) {
     console.error(`Error in POST /api/waitlists/[waitlistId]/leads:`, error);

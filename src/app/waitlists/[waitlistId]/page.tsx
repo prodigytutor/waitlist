@@ -13,8 +13,30 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@/components/ui/table"; // For displaying leads
-import { Badge } from "@/components/ui/badge"; // For displaying status or count
+} from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { toast } from "sonner";
+import { StatusDefinition } from '@/lib/redis'; // Assuming this type is exported or re-define here
+import LeadDetailModal from '@/components/leads/LeadDetailModal'; // Import the modal
+
+// Define a more detailed Lead interface based on what redis.ts provides
+interface Lead {
+  id: string; // leadId
+  email: string;
+  createdAt: string; // Renaming to joinedAt for display consistency if needed, but API returns createdAt
+  originalWaitlistId: string;
+  currentStatusId: string;
+  currentScore: number;
+  customFields?: Record<string, string>; // Optional custom fields
+}
 
 interface WaitlistDetails {
   id: string;
@@ -23,10 +45,13 @@ interface WaitlistDetails {
   userId: string;
 }
 
-interface Lead {
-  email: string;
-  joinedAt: string;
-}
+// Re-define StatusDefinition if not directly importable or for client-side adjustments
+// export interface StatusDefinition {
+//   id: string;
+//   name: string;
+//   color?: string;
+//   order: number;
+// }
 
 export default function WaitlistDetailPage() {
   const router = useRouter();
@@ -42,91 +67,178 @@ export default function WaitlistDetailPage() {
 
   const [waitlistDetails, setWaitlistDetails] = useState<WaitlistDetails | null>(null);
   const [leads, setLeads] = useState<Lead[]>([]);
-  const [isLoadingDetails, setIsLoadingDetails] = useState(true);
-  const [isLoadingLeads, setIsLoadingLeads] = useState(false);
-  const [detailError, setDetailError] = useState<string | null>(null);
-  const [leadsError, setLeadsError] = useState<string | null>(null);
+  const [statusDefinitions, setStatusDefinitions] = useState<StatusDefinition[]>([]);
+  
+  const [isLoadingPageData, setIsLoadingPageData] = useState(true);
+  const [pageError, setPageError] = useState<string | null>(null);
+  
+  // Specific loading/error states for actions if needed, or use a general one
+  const [isUpdatingStatus, setIsUpdatingStatus] = useState<string | null>(null); // leadId of status being updated
+  const [isRecalculatingScore, setIsRecalculatingScore] = useState<string | null>(null); // leadId of score being recalculated
+  const [isRecalculatingAllScores, setIsRecalculatingAllScores] = useState(false);
+
+  // State for the modal
+  const [selectedLeadIdForModal, setSelectedLeadIdForModal] = useState<string | null>(null);
+
+
+  const fetchData = async (showLoadingToast = false) => {
+    if (showLoadingToast) {
+        toast.info("Refreshing lead data...");
+    }
+    if (sessionStatus === 'authenticated' && waitlistId && session?.user) {
+      setIsLoadingPageData(true);
+      setPageError(null);
+      try {
+        const [detailsRes, leadsRes, statusesRes] = await Promise.all([
+          fetch(`/api/waitlists/${waitlistId}`),
+          fetch(`/api/waitlists/${waitlistId}/leads`),
+          fetch(`/api/waitlists/${waitlistId}/statuses`),
+        ]);
+
+        if (!detailsRes.ok) {
+          const errorData = await detailsRes.json();
+          throw new Error(errorData.error || `Error fetching details: ${detailsRes.status}`);
+        }
+        const detailsData: WaitlistDetails = await detailsRes.json();
+        if (detailsData.userId !== (session.user as any).id) {
+          throw new Error("Forbidden: You don't have access to this waitlist.");
+        }
+        setWaitlistDetails(detailsData);
+
+        if (!leadsRes.ok) {
+          const errorData = await leadsRes.json();
+          throw new Error(errorData.error || `Error fetching leads: ${leadsRes.status}`);
+        }
+        const leadsData: Lead[] = await leadsRes.json();
+        setLeads(leadsData);
+
+        if (!statusesRes.ok) {
+          const errorData = await statusesRes.json();
+          throw new Error(errorData.error || `Error fetching statuses: ${statusesRes.status}`);
+        }
+        const statusesData: StatusDefinition[] = await statusesRes.json();
+        setStatusDefinitions(statusesData.sort((a,b) => a.order - b.order));
+
+      } catch (error: any) {
+        console.error("Error fetching waitlist page data:", error);
+        setPageError(error.message);
+      } finally {
+        setIsLoadingPageData(false);
+      }
+    }
+  };
 
   useEffect(() => {
-    if (sessionStatus === 'authenticated' && waitlistId) {
-      setIsLoadingDetails(true);
-      setDetailError(null);
-      fetch(`/api/waitlists/${waitlistId}`)
-        .then(async (res) => {
-          if (!res.ok) {
-            const errorData = await res.json();
-            throw new Error(errorData.error || `Error: ${res.status}`);
-          }
-          return res.json();
-        })
-        .then((data: WaitlistDetails) => {
-          // Authorization check already happened on the server, but good for client defense
-          if (data.userId !== (session?.user as any)?.id) {
-            setDetailError("Forbidden: You don't have access to this waitlist.");
-            setWaitlistDetails(null); // Clear any potentially loaded data
-            return;
-          }
-          setWaitlistDetails(data);
-          // If details fetched successfully, fetch leads
-          setIsLoadingLeads(true);
-          setLeadsError(null);
-          return fetch(`/api/waitlists/${waitlistId}/leads`);
-        })
-        .then(async (res) => {
-          if (!res) return; // In case of forbidden access to details
-          if (!res.ok) {
-            const errorData = await res.json();
-            throw new Error(errorData.error || `Error fetching leads: ${res.status}`);
-          }
-          return res.json();
-        })
-        .then((leadsData: Lead[] | undefined) => {
-          if (leadsData) {
-            setLeads(leadsData);
-          }
-        })
-        .catch((error: any) => {
-          console.error("Error fetching waitlist data:", error);
-          // Differentiate between detail and leads error if possible,
-          // for now, a general error if details were the target
-          if (!waitlistDetails) { // If details haven't been set, error is likely from fetching details
-            setDetailError(error.message);
-          } else { // Otherwise, error is from fetching leads
-            setLeadsError(error.message);
-          }
-        })
-        .finally(() => {
-          setIsLoadingDetails(false);
-          setIsLoadingLeads(false);
-        });
-    }
+    fetchData();
   }, [sessionStatus, waitlistId, session?.user]);
 
-  const handleRemoveLead = async (email: string) => {
+
+  const handleRemoveLead = async (leadId: string, email: string) // Changed to leadId
+   => {
     if (!waitlistDetails) return;
     if (!window.confirm(`Are you sure you want to remove ${email} from this waitlist?`)) {
       return;
     }
 
     try {
+      // Need to pass email for the API, but leadId for UI update
       const response = await fetch(`/api/waitlists/${waitlistId}/leads`, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email: email }), // API expects email
       });
-      const data = await response.json();
       if (!response.ok) {
+        const data = await response.json();
         throw new Error(data.error || 'Failed to remove lead');
       }
-      alert('Lead removed successfully!'); // Or use a toast
-      // Refresh leads
-      setLeads(prevLeads => prevLeads.filter(lead => lead.email !== email));
+      toast.success(`Lead ${email} removed successfully!`);
+      setLeads(prevLeads => prevLeads.filter(lead => lead.id !== leadId));
     } catch (error: any) {
-      alert(`Error removing lead: ${error.message}`); // Or use a toast
+      toast.error(`Error removing lead: ${error.message}`);
       console.error("Error removing lead:", error);
     }
   };
+
+  const handleUpdateLeadStatus = async (leadId: string, newStatusId: string) => {
+    setIsUpdatingStatus(leadId);
+    try {
+        const response = await fetch(`/api/leads/${leadId}/status`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ statusId: newStatusId }),
+        });
+        if (!response.ok) {
+            const data = await response.json();
+            throw new Error(data.error || 'Failed to update status');
+        }
+        toast.success(`Status updated for lead ${leadId}`);
+        // Optimistically update UI or refetch lead data / entire list
+        setLeads(prevLeads => prevLeads.map(l => l.id === leadId ? {...l, currentStatusId: newStatusId} : l));
+    } catch (error: any) {
+        toast.error(`Error updating status: ${error.message}`);
+        console.error("Error updating status:", error);
+    } finally {
+        setIsUpdatingStatus(null);
+    }
+  };
+
+  const handleRecalculateScore = async (leadId: string) => {
+    setIsRecalculatingScore(leadId);
+    try {
+        const response = await fetch(`/api/leads/${leadId}/calculate-score`, { method: 'POST' });
+        if (!response.ok) {
+            const data = await response.json();
+            throw new Error(data.error || 'Failed to recalculate score');
+        }
+        const { newScore } = await response.json();
+        toast.success(`Score recalculated for lead ${leadId}. New score: ${newScore}`);
+        setLeads(prevLeads => prevLeads.map(l => l.id === leadId ? {...l, currentScore: newScore} : l));
+    } catch (error: any) {
+        toast.error(`Error recalculating score: ${error.message}`);
+        console.error("Error recalculating score:", error);
+    } finally {
+        setIsRecalculatingScore(null);
+    }
+  };
   
+  const handleRecalculateAllScores = async () => {
+    setIsRecalculatingAllScores(true);
+    toast.info("Recalculating scores for all leads...");
+    let successCount = 0;
+    let errorCount = 0;
+
+    for (const lead of leads) {
+        try {
+            const response = await fetch(`/api/leads/${lead.id}/calculate-score`, { method: 'POST' });
+            if (!response.ok) {
+                errorCount++;
+                console.warn(`Failed to update score for ${lead.id}`);
+                continue;
+            }
+            const { newScore } = await response.json();
+            // Update local state for this lead
+            setLeads(prev => prev.map(l => l.id === lead.id ? {...l, currentScore: newScore} : l));
+            successCount++;
+        } catch (e) {
+            errorCount++;
+            console.warn(`Error updating score for ${lead.id}`, e);
+        }
+    }
+    toast.success(`${successCount} scores recalculated. ${errorCount > 0 ? `${errorCount} errors.` : ''}`);
+    setIsRecalculatingAllScores(false);
+  };
+  
+  const handleViewEditDetails = (leadId: string) => {
+    setSelectedLeadIdForModal(leadId);
+  };
+
+  const handleCloseModal = (refreshNeeded?: boolean) => {
+    setSelectedLeadIdForModal(null);
+    if (refreshNeeded) {
+      fetchData(true); // Pass true to indicate it's a refresh, potentially show a toast
+    }
+  };
+
   const copyPublicUrlToClipboard = () => {
     const url = `${window.location.origin}/waitlist-public/${waitlistId}`;
     navigator.clipboard.writeText(url).then(() => {
@@ -138,12 +250,12 @@ export default function WaitlistDetailPage() {
   };
 
 
-  if (sessionStatus === 'loading' || isLoadingDetails) {
+  if (sessionStatus === 'loading' || isLoadingPageData) {
     return <p>Loading waitlist details...</p>;
   }
 
-  if (detailError) {
-    return <p style={{ color: 'red' }}>Error: {detailError}</p>;
+  if (pageError) {
+    return <p style={{ color: 'red' }}>Error: {pageError}</p>;
   }
 
   if (!waitlistDetails) {
@@ -151,10 +263,18 @@ export default function WaitlistDetailPage() {
   }
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-        <h1>{waitlistDetails.name}</h1>
-        <Button variant="outline" onClick={() => router.push('/dashboard')}>Back to Dashboard</Button>
+    <> {/* Use Fragment to allow multiple root elements including the modal */}
+      <div> {/* Existing page content wrapper */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+          <h1>{waitlistDetails.name}</h1>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <Button variant="outline" onClick={() => router.push(`/waitlists/${waitlistId}/settings`)}>
+            Settings
+          </Button>
+          <Button variant="outline" onClick={() => router.push('/dashboard')}>
+            Back to Dashboard
+          </Button>
+        </div>
       </div>
       <p>Created: {new Date(waitlistDetails.createdAt).toLocaleDateString()}</p>
       <p>Waitlist ID: <code>{waitlistDetails.id}</code></p>
@@ -163,10 +283,15 @@ export default function WaitlistDetailPage() {
       </Button>
 
       <section style={{ marginTop: '2rem' }}>
-        <h2>Leads <Badge variant="secondary">{leads.length}</Badge></h2>
-        {isLoadingLeads && <p>Loading leads...</p>}
-        {leadsError && <p style={{ color: 'red' }}>Error fetching leads: {leadsError}</p>}
-        {!isLoadingLeads && !leadsError && leads.length === 0 && (
+        <div className="flex justify-between items-center mb-4">
+            <h2 className="text-2xl font-semibold">Leads <Badge variant="secondary">{leads.length}</Badge></h2>
+            <Button onClick={handleRecalculateAllScores} disabled={isRecalculatingAllScores} size="sm">
+                {isRecalculatingAllScores ? "Recalculating..." : "Recalculate All Scores"}
+            </Button>
+        </div>
+
+        {/* Removed isLoadingLeads and leadsError as they are covered by isLoadingPageData and pageError */}
+        {!isLoadingPageData && !pageError && leads.length === 0 && (
           <p>No leads have joined this waitlist yet.</p>
         )}
         {leads.length > 0 && (
@@ -175,29 +300,80 @@ export default function WaitlistDetailPage() {
               <TableRow>
                 <TableHead>Email</TableHead>
                 <TableHead>Joined At</TableHead>
-                <TableHead>Actions</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Score</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {leads.map((lead) => (
-                <TableRow key={lead.email}>
-                  <TableCell>{lead.email}</TableCell>
-                  <TableCell>{new Date(lead.joinedAt).toLocaleString()}</TableCell>
-                  <TableCell>
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      onClick={() => handleRemoveLead(lead.email)}
-                    >
-                      Remove
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
+              {leads.map((lead) => {
+                const status = statusDefinitions.find(s => s.id === lead.currentStatusId);
+                return (
+                  <TableRow key={lead.id}>
+                    <TableCell className="font-medium">{lead.email}</TableCell>
+                    <TableCell>{new Date(lead.createdAt).toLocaleString()}</TableCell>
+                    <TableCell>
+                      <Badge 
+                        variant="outline" 
+                        style={status?.color ? { backgroundColor: status.color, color: '#fff', borderColor: status.color } : {}}
+                      >
+                        {status?.name || lead.currentStatusId}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>{lead.currentScore}</TableCell>
+                    <TableCell className="text-right space-x-2">
+                        <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                                <Button variant="ghost" size="sm" disabled={isUpdatingStatus === lead.id}>
+                                    {isUpdatingStatus === lead.id ? "Saving..." : "Set Status"}
+                                </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                                <DropdownMenuLabel>Change Status</DropdownMenuLabel>
+                                <DropdownMenuSeparator />
+                                {statusDefinitions.map(sDef => (
+                                    <DropdownMenuItem 
+                                        key={sDef.id} 
+                                        onClick={() => handleUpdateLeadStatus(lead.id, sDef.id)}
+                                        disabled={lead.currentStatusId === sDef.id}
+                                    >
+                                        {sDef.name}
+                                    </DropdownMenuItem>
+                                ))}
+                            </DropdownMenuContent>
+                        </DropdownMenu>
+                        <Button variant="ghost" size="sm" onClick={() => handleRecalculateScore(lead.id)} disabled={isRecalculatingScore === lead.id}>
+                            {isRecalculatingScore === lead.id ? "..." : "Re-Score"}
+                        </Button>
+                         <Button variant="ghost" size="sm" onClick={() => handleViewEditDetails(lead.id)}>
+                            Details
+                        </Button>
+                        <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => handleRemoveLead(lead.id, lead.email)}
+                        >
+                            Remove
+                        </Button>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         )}
       </section>
     </div>
+
+    {/* Modal Integration */}
+    {selectedLeadIdForModal && (
+        <LeadDetailModal
+            isOpen={!!selectedLeadIdForModal}
+            onClose={() => handleCloseModal(true)} // Pass true to refresh data on close
+            leadId={selectedLeadIdForModal}
+            // waitlistId={waitlistId} // waitlistId is derived from lead's originalWaitlistId within modal
+        />
+    )}
+    </>
   );
 }
